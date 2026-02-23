@@ -8,7 +8,8 @@ import {
 } from 'chai';
 
 import {
-  evaluate
+  evaluate,
+  isNotImplemented
 } from 'feelin';
 
 
@@ -103,7 +104,7 @@ function tryEval(expr, context = {}) {
   try {
     return evaluate(expr, context).value;
   } catch (err) {
-    if (err.message.startsWith('not implemented')) {
+    if (isNotImplemented(err)) {
       return NOT_IMPLEMENTED;
     }
 

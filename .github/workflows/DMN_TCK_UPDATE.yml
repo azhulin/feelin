@@ -1,8 +1,8 @@
 name: DMN_TCK_UPDATE
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '* 1 * * *'
+  # schedule:
+  #   - cron: '* 1 * * *'
 
 jobs:
   Build:

@@ -1,3 +1,5 @@
+export * from './utils.js';
+
 export * from './interpreter.js';
 
 export * from './parser.js';

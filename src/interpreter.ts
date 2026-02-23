@@ -22,7 +22,10 @@ import {
 import {
   notImplemented,
   parseParameterNames,
-  getFromContext
+  getFromContext,
+  SourceLocation,
+  FeelInUnsupportedError,
+  FeelInSyntaxError
 } from './utils.js';
 
 import {
@@ -42,15 +45,11 @@ export type WarningType =
   | 'NO_FUNCTION_FOUND'
   | 'FUNCTION_INVOCATION_FAILURE';
 
-export type SourceLocation = {
-  from: number,
-  to: number
-};
-
 export type Warning = {
   type: WarningType;
   message: string;
   position: SourceLocation;
+  input: string
   details: {
     template: string,
     values: Record<string, unknown>
@@ -67,30 +66,11 @@ export type EvaluationResult<T> = {
  */
 export type EvalContext = Record<string, unknown>;
 
-export class SyntaxError extends Error {
-
-  input: string;
-
-  position: SourceLocation;
-
-  constructor(
-      message: string,
-      details: {
-        input: string,
-        position: SourceLocation
-      }
-  ) {
-    super(message);
-
-    Object.assign(this, details);
-  }
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatDetails(template: string, values: Record<string, any>) {
 
   return Object.keys(values).reduce((message, key) => {
-    return message.replace(`{${key}}`, `'${ formatValue(values[key]) }'`);
+    return message.replace(`{${key}}`, `${ formatValue(values[key]) }`);
   }, template);
 }
 
@@ -103,6 +83,7 @@ class InterpreterContext {
       type,
       message: formatDetails(details.template, details.values),
       details,
+      input: node.input,
       position: node.position
     });
   }
@@ -151,7 +132,7 @@ class Interpreter {
         } = nodeRef.type;
 
         if (isError) {
-          throw lintError(input, nodeRef);
+          throw syntaxError(input, nodeRef);
         }
 
         if (isSkipped) {
@@ -244,7 +225,7 @@ export function unaryTest(
     evalContext: EvalContext = {},
     dialect?: string
 ) : EvaluationResult<boolean | null> {
-
+  evalContext = { '?context': evalContext, ...evalContext };
   const interpreterContext = new InterpreterContext();
 
   const value = evalContext['?'] !== undefined ? evalContext['?'] : null;
@@ -269,7 +250,7 @@ export function evaluate(
     evalContext: EvalContext = {},
     dialect?: string
 ): EvaluationResult<unknown> {
-
+  evalContext = { '?context': evalContext, ...evalContext };
   const interpreterContext = new InterpreterContext();
 
   const {
@@ -300,7 +281,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
       if (isArray(left) || isArray(right)) {
         interpreterContext.addWarning(node, 'INVALID_TYPE', {
-          template: `Can't ${opName} {right} to {left}`,
+          template: `Cannot ${opName} {right} to {left}.`,
           values: {
             left,
             right
@@ -318,7 +299,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
       if (temporal.includes(leftType)) {
         if (!temporal.includes(rightType)) {
           interpreterContext.addWarning(node, 'INVALID_TYPE', {
-            template: `Can't ${opName} {right} to {left}`,
+            template: `Cannot ${opName} {right} to {left}.`,
             values: {
               left,
               right
@@ -329,7 +310,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
         }
       } else if (leftType !== rightType || !types.includes(leftType)) {
         interpreterContext.addWarning(node, 'INVALID_TYPE', {
-          template: `Can't ${opName} {right} to {left}`,
+          template: `Cannot ${opName} {right} to {left}.`,
           values: {
             left,
             right
@@ -538,14 +519,14 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
       if (isContext(context)) {
         interpreterContext.addWarning(node, 'NO_CONTEXT_ENTRY_FOUND', {
-          template: `Key '${name}' not found in {target}`,
+          template: `Key '${name}' not found in {target}.`,
           values: {
             target: context
           }
         });
       } else {
         interpreterContext.addWarning(node, 'NO_PROPERTY_FOUND', {
-          template: `Property '${name}' not found in {target}`,
+          template: `Property '${name}' not found in {target}.`,
           values: {
             target: context
           }
@@ -553,7 +534,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
       }
     } else {
       interpreterContext.addWarning(node, 'NO_VARIABLE_FOUND', {
-        template: `Variable '${name}' not found`,
+        template: `Variable '${name}' not found.`,
         values: {}
       });
     }
@@ -738,7 +719,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
       if (!wrappedFn) {
         interpreterContext.addWarning(node, 'NO_FUNCTION_FOUND', {
-          template: 'Cannot invoke {target}',
+          template: 'Cannot invoke {target}.',
           values: {
             target
           }
@@ -753,7 +734,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
       if (result === FUNCTION_PARAMETER_MISSMATCH) {
         interpreterContext.addWarning(node, 'FUNCTION_INVOCATION_FAILURE', {
-          template: 'Cannot invoke {target} with parameters {params}',
+          template: 'Cannot invoke {target} with parameters {params}.',
           values: {
             target: wrappedFn,
             params: contextOrArgs
@@ -774,7 +755,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
     if (!wrappedFn) {
       interpreterContext.addWarning(node, 'NO_FUNCTION_FOUND', {
-        template: "Cannot invoke '@'",
+        template: "Cannot invoke '@'.",
         values: {}
       });
 
@@ -792,7 +773,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
     if (!wrappedFn) {
       interpreterContext.addWarning(node, 'NO_FUNCTION_FOUND', {
-        template: 'Cannot invoke {target}',
+        template: 'Cannot invoke {target}.',
         values: {
           target
         }
@@ -807,7 +788,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
     if (result === FUNCTION_PARAMETER_MISSMATCH) {
       interpreterContext.addWarning(node, 'FUNCTION_INVOCATION_FAILURE', {
-        template: 'Cannot invoke {target} with parameters {params}',
+        template: 'Cannot invoke {target} with parameters {params}.',
         values: {
           target: wrappedFn,
           params: contextOrArgs
@@ -827,7 +808,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     const thenValue = args[3];
     const elseValue = args[5];
 
-    const type = coalecenseTypes(thenValue, elseValue);
+    const type = coalescenceTypes(thenValue, elseValue);
 
     return tag((context) => {
 
@@ -849,12 +830,31 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     // expression !compare kw<"in"> PositiveUnaryTest |
     // expression !compare kw<"in"> !unaryTest "(" PositiveUnaryTests ")"
     if (operator === 'in') {
-      return compareIn(args[0](context), (args[3] || args[2])(context));
+      const value = args[0](context);
+      const tests = (args[3] || args[2])(context);
+
+      const valueType = getType(value);
+      const testTypeResult = getTestType(tests);
+
+      if (testTypeResult !== null && testTypeResult.type !== 'nil' && valueType !== 'nil' && testTypeResult.type !== valueType) {
+        interpreterContext.addWarning(node, 'NOT_COMPARABLE', {
+          template: 'Cannot compare {left} with element {right} of {list}.',
+          values: {
+            left: value,
+            right: testTypeResult.item,
+            list: tests,
+          }
+        });
+        return null;
+      }
+
+      return compareIn(value, tests);
     }
 
     // expression !compare kw<"between"> expression kw<"and"> expression
     if (operator === 'between') {
 
+      const value = args[0](context);
       const start = args[2](context);
       const end = args[4](context);
 
@@ -862,7 +862,21 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
         return null;
       }
 
-      return createRange(start, end).includes(args[0](context));
+      const valueType = getType(value);
+      const rangeType = getType(start) !== 'nil' ? getType(start) : getType(end);
+
+      if (valueType !== 'nil' && rangeType !== 'nil' && valueType !== rangeType) {
+        interpreterContext.addWarning(node, 'NOT_COMPARABLE', {
+          template: 'Cannot compare {left} and {right}.',
+          values: {
+            left: value,
+            right: { start, end },
+          }
+        });
+        return null;
+      }
+
+      return createRange(start, end).includes(value);
     }
 
     // expression !compare CompareOp<"=" | "!="> expression |
@@ -870,7 +884,27 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     const left = args[0](context);
     const right = args[2](context);
 
+    const leftType = isArray(left) && left.length < 2 ? getType(left[0]) : getType(left);
+    const rightType = isArray(right) && right.length < 2 ? getType(right[0]) : getType(right);
+
+    const temporalTypes = [ 'date time', 'time', 'date' ];
     const test = operator()(right);
+    const isOrderingOp = test instanceof Range;
+
+    if (
+      (isOrderingOp && (leftType === 'nil' || rightType === 'nil')) ||
+      (leftType !== 'nil' && rightType !== 'nil' && leftType !== rightType &&
+        !(temporalTypes.includes(leftType) && temporalTypes.includes(rightType)))
+    ) {
+      interpreterContext.addWarning(node, 'NOT_COMPARABLE', {
+        template: 'Cannot compare {left} and {right}.',
+        values: {
+          left,
+          right,
+        }
+      });
+      return null;
+    }
 
     return compareValue(test, left);
   }, 'test');
@@ -918,7 +952,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
       return tag((context) => {
         return op(context)(a, b);
-      }, coalecenseTypes(a, b));
+      }, coalescenceTypes(a, b));
     }
 
     // unary expression (-b)
@@ -973,33 +1007,48 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
     const type = filterFn.type;
 
-    // a[1]
-    // a[true]
-    // a[b]
-    // a[b()]
-    // a[1 + 3]
-    if ([ 'number', 'boolean', 'any' ].includes(type)) {
-      const idx = filterFn(context);
-
+    const applyScalarFilter = (idx) => {
       if (isBoolean(idx)) {
-        if (idx === true) {
-          return target;
-        } else {
-          return [];
-        }
+        return idx === true ? target : [];
       }
 
-      if (!isNumber(idx)) {
-        return [];
+      if (isNumber(idx)) {
+        const value = filterTarget[idx < 0 ? filterTarget.length + idx : idx - 1];
+        return typeof value === 'undefined' ? null : value;
       }
 
-      const value = filterTarget[idx < 0 ? filterTarget.length + idx : idx - 1];
+      return [];
+    };
 
-      if (typeof value === 'undefined') {
-        return null;
-      } else {
-        return value;
+    // a[1], a[true], a[1 + 3]
+    if ([ 'number', 'boolean' ].includes(type)) {
+      return applyScalarFilter(filterFn(context));
+    }
+
+    // a[b], a[b()], a[b.c]
+    // Context element list: inner context checked first (per spec, context
+    // entries are accessible without item. prefix). Outer context is still
+    // reachable as fallback within iterationContext. Non-context elements
+    // have no inner context entries and are excluded.
+    // Non-context element list: outer context only (positional index / boolean).
+    if (type === 'any') {
+      if (filterTarget.some(isContext)) {
+        return filterTarget.filter(el => {
+          if (!isContext(el)) {
+            return false;
+          }
+
+          const iterationContext = {
+            ...context,
+            item: el,
+            ...el
+          };
+
+          return filterFn(iterationContext) === true;
+        });
       }
+
+      return applyScalarFilter(filterFn(context));
     }
 
     // TODO(nikku): not covered by spec
@@ -1090,7 +1139,10 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
       const tests = negate ? args.slice(2, -1) : args;
 
-      const matches = tests.map(test => test(context)).flat(1).map(test => {
+      const evaluatedTests = tests.map(test => test(context)).flat(1);
+      let hasNotComparable = false;
+
+      const results = evaluatedTests.map(test => {
 
         if (isArray(test)) {
           return test.includes(value);
@@ -1100,10 +1152,32 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
           return test;
         }
 
-        return compareValue(test, value);
-      }).some(v => v === true);
+        if (typeof test === 'function' || test instanceof Range) {
+          return compareValue(test, value);
+        }
 
-      return matches === null ? null : (negate ? !matches : matches);
+        // Plain value: detect type mismatch
+        const result = compareValue(test, value);
+        if (result === null) {
+          hasNotComparable = true;
+        }
+        return result;
+      });
+
+      const matches = results.some(v => v === true);
+
+      if (!negate && !matches && hasNotComparable) {
+        interpreterContext.addWarning(node, 'NOT_COMPARABLE', {
+          template: 'Cannot compare {left} and {right}.',
+          values: {
+            left: value,
+            right: evaluatedTests.length === 1 ? evaluatedTests[0] : evaluatedTests,
+          }
+        });
+        return null;
+      }
+
+      return negate ? !matches : matches;
     };
   };
 
@@ -1142,6 +1216,23 @@ function compareIn(value, tests) {
   return tests.some(
     test => compareValue(test, value)
   );
+}
+
+function getTestType(tests) {
+  if (tests instanceof Range) {
+    const item = tests.start ?? tests.end;
+    return { type: getType(item), item };
+  }
+  if (isArray(tests)) {
+    for (const test of tests) {
+      const item = test instanceof Range ? (test.start ?? test.end) : test;
+      const type = getType(item);
+      if (type !== 'nil') {
+        return { type, item };
+      }
+    }
+  }
+  return null;
 }
 
 function compareValue(test, value) {
@@ -1212,12 +1303,12 @@ function createRange(start, end, startIncluded = true, endIncluded = true) : Ran
     return nullRange;
   }
 
-  throw new Error(`unsupported range: ${start}..${end}`);
+  throw new FeelInUnsupportedError(`range ${formatValue(start)}..${formatValue(end)}`);
 }
 
 function noopMap() {
   return () => {
-    throw new Error('unsupported range operation: map');
+    throw new FeelInUnsupportedError('range operation: map');
   };
 }
 
@@ -1401,7 +1492,7 @@ function createDateTimeRange(start, end, startIncluded, endIncluded) {
 }
 
 
-function coalecenseTypes(a, b) {
+function coalescenceTypes(a, b) {
 
   if (!b) {
     return a.type;
@@ -1527,11 +1618,7 @@ function parseString(str: string) {
 }
 
 
-type LintError = {
-  message: string
-};
-
-function lintErrorDetails(errorNodeRef: SyntaxNodeRef) : {
+function syntaxErrorDetails(errorNodeRef: SyntaxNodeRef) : {
   message: string,
   position: SourceLocation
 } {
@@ -1546,7 +1633,7 @@ function lintErrorDetails(errorNodeRef: SyntaxNodeRef) : {
 
   if (node.from !== node.to) {
     return {
-      message: `Unrecognized token in <${parent.name}>`,
+      message: `Unrecognized token in <${parent.name}>.`,
       position: {
         from,
         to
@@ -1558,7 +1645,7 @@ function lintErrorDetails(errorNodeRef: SyntaxNodeRef) : {
 
   if (next) {
     return {
-      message: `Unrecognized token <${next.name}> in <${parent.name}>`,
+      message: `Unrecognized token <${next.name}> in <${parent.name}>.`,
       position: {
         from: next.from,
         to: next.to
@@ -1568,7 +1655,7 @@ function lintErrorDetails(errorNodeRef: SyntaxNodeRef) : {
     const unfinished = parent.enterUnfinishedNodesBefore(errorNodeRef.to);
 
     return {
-      message: `Incomplete <${ (unfinished || parent).name }>`,
+      message: `Incomplete <${ (unfinished || parent).name }>.`,
       position: {
         from,
         to
@@ -1577,14 +1664,14 @@ function lintErrorDetails(errorNodeRef: SyntaxNodeRef) : {
   }
 }
 
-function lintError(input: string, errorNodeRef: SyntaxNodeRef): LintError {
+function syntaxError(input: string, errorNodeRef: SyntaxNodeRef): FeelInSyntaxError {
 
   const {
     message,
     position
-  } = lintErrorDetails(errorNodeRef);
+  } = syntaxErrorDetails(errorNodeRef);
 
-  return new SyntaxError(
+  return new FeelInSyntaxError(
     message,
     {
       input: input.slice(position.from, position.to),
@@ -1617,15 +1704,16 @@ function formatValue(value: any) {
   const type = getType(value);
 
   if (type === 'string') {
-    return `"${ String(value) }"`;
+    return `'"${ String(value) }"'`;
   }
 
   if (type === 'list') {
-    return `[${value.length} items]`;
+    const { length } = value;
+    return 1 === length ? "'[1 item]'" : `'[${length} items]'`;
   }
 
   if (type === 'context') {
-    return '{...}';
+    return "'{...}'";
   }
 
   if (type === 'function') {
@@ -1633,15 +1721,19 @@ function formatValue(value: any) {
     const parameterNames = value.parameterNames;
 
     if (parameterNames) {
-      return `function(${ parameterNames.join(', ') })`;
+      return `'function(${ parameterNames.join(', ') })'`;
     }
 
-    return 'function';
+    return "'function'";
   }
 
   if (type === 'nil') {
-    return 'null';
+    return "'null'";
   }
 
-  return String(value);
+  if (type === 'range') {
+    return '<range>';
+  }
+
+  return `'${String(value)}'`;
 };

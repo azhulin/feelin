@@ -2,6 +2,10 @@ import { normalizeContextKey } from 'lezer-feel';
 
 import { getType } from './types.js';
 
+export type SourceLocation = {
+  from: number,
+  to: number
+};
 
 export function parseParameterNames(fn) {
 
@@ -26,12 +30,51 @@ export function parseParameterNames(fn) {
   return params.split(',').map(p => p.trim());
 }
 
-export function notImplemented(thing) {
-  return new Error(`not implemented: ${thing}`);
+export type ErrorType = 'SYNTAX' | 'NOT_IMPLEMENTED' | 'UNSUPPORTED';
+
+export class FeelInError extends Error {
+  constructor(public readonly type: ErrorType, message: string) {
+    super(message);
+  }
 }
 
-export function isNotImplemented(err) {
-  return /^not implemented/.test(err.message);
+export class FeelInNotImplementedError extends FeelInError {
+  constructor(public readonly thing: string) {
+    super('NOT_IMPLEMENTED', `Not implemented: ${thing}.`);
+  }
+}
+
+export class FeelInUnsupportedError extends FeelInError {
+  constructor(public readonly thing: string) {
+    super('UNSUPPORTED', `Unsupported ${thing}.`);
+  }
+}
+
+export class FeelInSyntaxError extends FeelInError {
+
+  input: string;
+
+  position: SourceLocation;
+
+  constructor(
+      message: string,
+      details: {
+        input: string,
+        position: SourceLocation
+      }
+  ) {
+    super('SYNTAX', message);
+
+    Object.assign(this, details);
+  }
+}
+
+export function notImplemented(thing: string) {
+  return new FeelInNotImplementedError(thing);
+}
+
+export function isNotImplemented(err: unknown) {
+  return err instanceof FeelInNotImplementedError;
 }
 
 /**

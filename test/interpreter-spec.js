@@ -780,6 +780,20 @@ describe('interpreter', function() {
       expr('[ { x: 1, y: 2 }, { x: null, y: 3 } ][ x < 2 ]', [ { x: 1, y: 2 } ]);
       expr('[ { x: 1, y: 2 }, { y: 3 } ][ x < 2 ]', [ { x: 1, y: 2 } ]);
 
+      // bare variable name resolves to boolean element property
+      expr('[{ a: true }, { a: false }][a]', [ { a: true } ]);
+      expr('[{ a: true }, { a: true }][a]', [ { a: true }, { a: true } ]);
+      expr('[{ a: false }][a]', []);
+
+      // non-boolean element property: not true → excluded
+      expr('[{ a: 1 }][a]', []);
+
+      // element missing the property: excluded; element with property: included
+      expr('[{ b: 1 }, { a: true }][a]', [ { a: true } ]);
+
+      // non-context elements have no inner context → excluded
+      expr('[{ a: true }, 1, "foo"][a]', [ { a: true } ]);
+
       expr('a[1]', null, { a: null });
 
       expr('a[1]', null);
@@ -929,6 +943,17 @@ describe('interpreter', function() {
           b: a + 1
         }
       `, { a: 1, b: 2 });
+
+      describe('?context', function() {
+
+        expr('get value(?context, "a")', 1, { a: 1 });
+
+        expr('get value(?context, key)', 1, { a: 1, key: 'a' });
+
+        // user-supplied ?context is not overwritten
+        expr('?context', 'custom', { '?context': 'custom' });
+
+      });
 
     });
 
@@ -1114,6 +1139,18 @@ describe('interpreter', function() {
     unary(true, 'some x in ? satisfies true', false);
     unary([ false ], 'some x in ? satisfies true', true);
     unary(false, 'some x in ? satisfies true', false);
+
+
+    describe('?context', function() {
+
+      unary({ '?': 5, threshold: 3 }, '? > get value(?context, "threshold")', true);
+
+      unary({ '?': 5, key: 'threshold', threshold: 10 }, '? > get value(?context, key)', false);
+
+      // user-supplied ?context is not overwritten
+      unary({ '?': 42, '?context': { foo: 42 } }, 'get value(?context, "foo")', true);
+
+    });
 
 
     describe('Interval', function() {
@@ -1362,19 +1399,37 @@ describe('interpreter', function() {
 
   describe('comparison', function() {
 
+    // single-element list equality
     expr('1 = [1]', true);
-
     expr('[ 1 ] = 1', true);
-
     expr('[ "A" ] = "A"', true);
 
     expr('[ 1, 2, { foo: "FOO" } ] = [ 1, 2, { foo: "FOO" } ]', true);
 
+    // type mismatch → null (NOT_COMPARABLE)
+    expr('"foo" = 5', null);
+    expr('"foo" != 5', null);
+    expr('"foo" > 5', null);
+    expr('5 > "foo"', null);
+
+    // ordering with nil → null (NOT_COMPARABLE)
     expr('null < 2', null);
     expr('2 < null', null);
-
     expr('null > 2', null);
     expr('2 > null', null);
+
+    // equality with nil → false (well-defined)
+    expr('1 = null', false);
+    expr('null = 1', false);
+    expr('"foo" = null', false);
+
+    // type mismatch between → null (NOT_COMPARABLE)
+    expr('"foo" between 1 and 5', null);
+    expr('1 between "a" and "z"', null);
+
+    // type mismatch in → null (NOT_COMPARABLE)
+    expr('"foo" in (1, 2, 3)', null);
+    expr('1 in ("a", "b")', null);
 
   });
 
@@ -1413,10 +1468,10 @@ describe('interpreter', function() {
           }
 
           expect(error).to.exist;
-          expect(error).to.have.keys([ 'position', 'input' ]);
+          expect(error).to.have.keys([ 'position', 'input', 'type' ]);
 
           const actualMessage =
-            `${error.message} parsing <${error.input}> at [${error.position.from}, ${error.position.to}]`;
+            `${error.message} Parsing <${error.input}> at [${error.position.from}, ${error.position.to}].`;
 
           expect(actualMessage, 'error message').to.eql(expectedMessage);
         });
@@ -1425,42 +1480,42 @@ describe('interpreter', function() {
       verifyError({
         error: 'bogus statement',
         fn: () => evaluate('1 * #3'),
-        expectedMessage: 'Unrecognized token in <ArithmeticExpression> parsing <#> at [4, 5]'
+        expectedMessage: 'Unrecognized token in <ArithmeticExpression>. Parsing <#> at [4, 5].'
       });
 
 
       verifyError({
         error: 'multiple expressions',
         fn: () => evaluate('1 2 3'),
-        expectedMessage: 'Unrecognized token in <Expression> parsing <2> at [2, 3]'
+        expectedMessage: 'Unrecognized token in <Expression>. Parsing <2> at [2, 3].'
       });
 
 
       verifyError({
         error: 'empty expression',
         fn: () => evaluate(''),
-        expectedMessage: 'Incomplete <Expression> parsing <> at [0, 0]'
+        expectedMessage: 'Incomplete <Expression>. Parsing <> at [0, 0].'
       });
 
 
       verifyError({
         error: 'incomplete if expression',
         fn: () => evaluate('if true'),
-        expectedMessage: 'Incomplete <IfExpression> parsing <> at [7, 7]'
+        expectedMessage: 'Incomplete <IfExpression>. Parsing <> at [7, 7].'
       });
 
 
       verifyError({
         error: 'broken if expression',
         fn: () => evaluate('if true { a: 10 }'),
-        expectedMessage: 'Unrecognized token <Context> in <IfExpression> parsing <{ a: 10 }> at [8, 17]'
+        expectedMessage: 'Unrecognized token <Context> in <IfExpression>. Parsing <{ a: 10 }> at [8, 17].'
       });
 
 
       verifyError({
         error: 'empty unary tests',
         fn: () => unaryTest(''),
-        expectedMessage: 'Incomplete <UnaryTests> parsing <> at [0, 0]'
+        expectedMessage: 'Incomplete <UnaryTests>. Parsing <> at [0, 0].'
       });
 
     });
@@ -1493,11 +1548,12 @@ describe('interpreter', function() {
 
         expect(warnings).to.eql([
           {
-            message: "Variable 'x' not found",
+            message: "Variable 'x' not found.",
             type: 'NO_VARIABLE_FOUND',
+            input: 'x',
             position: { from: 0, to: 1 },
             details: {
-              template: "Variable 'x' not found",
+              template: "Variable 'x' not found.",
               values: {}
             }
           }
@@ -1518,11 +1574,12 @@ describe('interpreter', function() {
 
         expect(warnings).to.eql([
           {
-            message: "Key 'x' not found in '{...}'",
+            message: "Key 'x' not found in '{...}'.",
             type: 'NO_CONTEXT_ENTRY_FOUND',
+            input: 'x',
             position: { from: 10, to: 11 },
             details: {
-              template: "Key 'x' not found in {target}",
+              template: "Key 'x' not found in {target}.",
               values: {
                 target: { a: 10 }
               }
@@ -1545,11 +1602,12 @@ describe('interpreter', function() {
 
         expect(warnings).to.eql([
           {
-            message: "Property 'x' not found in '1'",
+            message: "Property 'x' not found in '1'.",
             type: 'NO_PROPERTY_FOUND',
+            input: 'x',
             position: { from: 2, to: 3 },
             details: {
-              template: "Property 'x' not found in {target}",
+              template: "Property 'x' not found in {target}.",
               values: {
                 target: 1
               }
@@ -1572,11 +1630,12 @@ describe('interpreter', function() {
 
         expect(warnings).to.eql([
           {
-            message: "Property 'string' not found in 'null'",
+            message: "Property 'string' not found in 'null'.",
             type: 'NO_PROPERTY_FOUND',
+            input: 'string',
             position: { from: 5, to: 11 },
             details: {
-              template: "Property 'string' not found in {target}",
+              template: "Property 'string' not found in {target}.",
               values: {
                 target: null
               }
@@ -1600,10 +1659,11 @@ describe('interpreter', function() {
         expect(warnings).to.eql([
           {
             type: 'INVALID_TYPE',
-            message: "Can't add '10' to '\"foo\"'",
+            message: "Cannot add '10' to '\"foo\"'.",
+            input: '+',
             position: { from: 6, to: 7 },
             details: {
-              template: "Can't add {right} to {left}",
+              template: 'Cannot add {right} to {left}.',
               values: {
                 left: 'foo',
                 right: 10
@@ -1628,10 +1688,11 @@ describe('interpreter', function() {
         expect(warnings).to.eql([
           {
             type: 'INVALID_TYPE',
-            message: "Can't multiply '3' to '[2 items]'",
+            message: "Cannot multiply '3' to '[2 items]'.",
+            input: '*',
             position: { from: 7, to: 8 },
             details: {
-              template: "Can't multiply {right} to {left}",
+              template: 'Cannot multiply {right} to {left}.',
               values: {
                 left: [ 1, 2 ],
                 right: 3
@@ -1656,10 +1717,11 @@ describe('interpreter', function() {
         expect(warnings).to.eql([
           {
             type: 'INVALID_TYPE',
-            message: "Can't exponentiate '10' to '2025-12-12T00:00:00.000Z'",
+            message: "Cannot exponentiate '10' to '2025-12-12T00:00:00.000Z'.",
+            input: '**',
             position: { from: 14, to: 16 },
             details: {
-              template: "Can't exponentiate {right} to {left}",
+              template: 'Cannot exponentiate {right} to {left}.',
               values: {
                 right: 10,
                 left: date('2025-12-12')
@@ -1670,13 +1732,121 @@ describe('interpreter', function() {
       });
 
 
-      it.skip('NOT_COMPARABLE for basic comparison');
+      it('NOT_COMPARABLE for basic comparison', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('"foo" = 5');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'NOT_COMPARABLE',
+            message: "Cannot compare '\"foo\"' and '5'.",
+            input: '"foo" = 5',
+            position: { from: 0, to: 9 },
+            details: {
+              template: 'Cannot compare {left} and {right}.',
+              values: {
+                left: 'foo',
+                right: 5
+              }
+            }
+          }
+        ]);
+      });
 
 
-      it.skip('NOT_COMPARABLE for <between> comparison');
+      it('NOT_COMPARABLE for ordering with nil', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('1 > null');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'NOT_COMPARABLE',
+            message: "Cannot compare '1' and 'null'.",
+            input: '1 > null',
+            position: { from: 0, to: 8 },
+            details: {
+              template: 'Cannot compare {left} and {right}.',
+              values: {
+                left: 1,
+                right: null
+              }
+            }
+          }
+        ]);
+      });
 
 
-      it.skip('NOT_COMPARABLE for <in> comparison');
+      it('NOT_COMPARABLE for <between> comparison', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('"foo" between 1 and 5');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'NOT_COMPARABLE',
+            message: "Cannot compare '\"foo\"' and '{...}'.",
+            input: '"foo" between 1 and 5',
+            position: { from: 0, to: 21 },
+            details: {
+              template: 'Cannot compare {left} and {right}.',
+              values: {
+                left: 'foo',
+                right: { start: 1, end: 5 }
+              }
+            }
+          }
+        ]);
+      });
+
+
+      it('NOT_COMPARABLE for <in> comparison', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('"foo" in (1, 2, 3)');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'NOT_COMPARABLE',
+            message: "Cannot compare '\"foo\"' with element '1' of '[3 items]'.",
+            input: '"foo" in (1, 2, 3)',
+            position: { from: 0, to: 18 },
+            details: {
+              template: 'Cannot compare {left} with element {right} of {list}.',
+              values: {
+                left: 'foo',
+                right: 1,
+                list: [ 1, 2, 3 ]
+              }
+            }
+          }
+        ]);
+      });
 
 
       it('NOT_CALLABLE for non-function', function() {
@@ -1693,10 +1863,11 @@ describe('interpreter', function() {
         expect(warnings).to.eql([
           {
             type: 'NO_FUNCTION_FOUND',
-            message: "Cannot invoke '5'",
+            message: "Cannot invoke '5'.",
+            input: 'x()',
             position: { from: 0, to: 3 },
             details: {
-              template: 'Cannot invoke {target}',
+              template: 'Cannot invoke {target}.',
               values: {
                 target: 5
               }
@@ -1721,7 +1892,7 @@ describe('interpreter', function() {
 
         expect(warnings[0]).to.deep.include({
           type: 'FUNCTION_INVOCATION_FAILURE',
-          message: "Cannot invoke 'function(negand)' with parameters '[2 items]'",
+          message: "Cannot invoke 'function(negand)' with parameters '[2 items]'.",
           position: { from: 0, to: 9 }
         });
 
@@ -1744,7 +1915,7 @@ describe('interpreter', function() {
 
         expect(warnings[0]).to.deep.include({
           type: 'FUNCTION_INVOCATION_FAILURE',
-          message: "Cannot invoke 'function(negand)' with parameters '{...}'",
+          message: "Cannot invoke 'function(negand)' with parameters '{...}'.",
           position: { from: 0, to: 11 }
         });
 
@@ -1767,7 +1938,7 @@ describe('interpreter', function() {
 
         expect(warnings[0]).to.deep.include({
           type: 'FUNCTION_INVOCATION_FAILURE',
-          message: "Cannot invoke 'function(year, month, day, from)' with parameters '[6 items]'",
+          message: "Cannot invoke 'function(year, month, day, from)' with parameters '[6 items]'.",
           position: { from: 0, to: 22 }
         });
 
@@ -1790,7 +1961,7 @@ describe('interpreter', function() {
 
         expect(warnings[0]).to.deep.include({
           type: 'FUNCTION_INVOCATION_FAILURE',
-          message: "Cannot invoke 'function(year, month, day, from)' with parameters '{...}'",
+          message: "Cannot invoke 'function(year, month, day, from)' with parameters '{...}'.",
           position: { from: 0, to: 12 }
         });
 
@@ -1863,12 +2034,42 @@ describe('interpreter', function() {
 
       expect(warnings).to.eql([
         {
-          message: "Variable 'x' not found",
+          message: "Variable 'x' not found.",
           type: 'NO_VARIABLE_FOUND',
+          input: 'x',
           position: { from: 0, to: 1 },
           details: {
-            template: "Variable 'x' not found",
+            template: "Variable 'x' not found.",
             values: {}
+          }
+        }
+      ]);
+    });
+
+
+    it('NOT_COMPARABLE when unary test type does not match value type', function() {
+
+      // when
+      const {
+        value,
+        warnings
+      } = unaryTest('"some string"', { '?': 123 });
+
+      // then
+      expect(value).to.be.null;
+
+      expect(warnings).to.eql([
+        {
+          type: 'NOT_COMPARABLE',
+          message: "Cannot compare '123' and '\"some string\"'.",
+          position: { from: 0, to: 13 },
+          input: '"some string"',
+          details: {
+            template: 'Cannot compare {left} and {right}.',
+            values: {
+              left: 123,
+              right: 'some string'
+            }
           }
         }
       ]);

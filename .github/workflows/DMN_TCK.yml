@@ -1,6 +1,6 @@
 name: DMN_TCK
 on:
-  push:
+  #push:
   pull_request:
 
 jobs:
